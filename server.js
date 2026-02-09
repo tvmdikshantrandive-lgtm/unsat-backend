@@ -25,38 +25,24 @@ const auth = new google.auth.GoogleAuth({
 
 const drive = google.drive({ version: "v3", auth });
 
-const ROOT_FOLDER_NAME = "UNSAT-SCHOOLS";
-
 /* ================= HELPERS ================= */
 
 /**
- * Get root folder ID from Shared Drive
+ * In Shared Drives, the DRIVE itself is the root.
+ * No folder lookup is needed.
  */
-async function getRootFolderId() {
-  const res = await drive.files.list({
-    corpora: "drive",
-    driveId: process.env.SHARED_DRIVE_ID,
-    q: `name='${ROOT_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder'`,
-    fields: "files(id)",
-    includeItemsFromAllDrives: true,
-    supportsAllDrives: true
-  });
-
-  if (!res.data.files.length) {
-    throw new Error("UNSAT-SCHOOLS folder not found in Shared Drive");
-  }
-
-  return res.data.files[0].id;
+function getDriveRootId() {
+  return process.env.SHARED_DRIVE_ID;
 }
 
 /**
- * Get or create a subfolder inside Shared Drive
+ * Get or create a school folder directly under Shared Drive
  */
-async function getOrCreateFolder(name, parentId) {
+async function getOrCreateSchoolFolder(schoolName) {
   const res = await drive.files.list({
     corpora: "drive",
     driveId: process.env.SHARED_DRIVE_ID,
-    q: `'${parentId}' in parents and name='${name}' and mimeType='application/vnd.google-apps.folder'`,
+    q: `name='${schoolName}' and mimeType='application/vnd.google-apps.folder'`,
     fields: "files(id)",
     includeItemsFromAllDrives: true,
     supportsAllDrives: true
@@ -68,9 +54,9 @@ async function getOrCreateFolder(name, parentId) {
 
   const folder = await drive.files.create({
     resource: {
-      name,
+      name: schoolName,
       mimeType: "application/vnd.google-apps.folder",
-      parents: [parentId]
+      parents: [process.env.SHARED_DRIVE_ID]
     },
     supportsAllDrives: true
   });
@@ -79,7 +65,7 @@ async function getOrCreateFolder(name, parentId) {
 }
 
 /**
- * Upload JSON file (overwrite if exists)
+ * Upload JSON file (overwrite-safe)
  */
 async function uploadJson(parentId, fileName, data) {
   const existing = await drive.files.list({
@@ -140,14 +126,12 @@ async function readJson(parentId, fileName) {
 
 app.get("/drive-test", async (req, res) => {
   try {
-    const rootId = await getRootFolderId();
     res.json({
       success: true,
-      message: "Shared Drive connected",
-      rootFolderId: rootId
+      message: "Shared Drive root ready",
+      driveId: process.env.SHARED_DRIVE_ID
     });
   } catch (e) {
-    console.error("DRIVE TEST ERROR:", e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -165,8 +149,7 @@ app.post("/schools/save", async (req, res) => {
   console.log("SAVE REQUEST:", schoolName);
 
   try {
-    const rootId = await getRootFolderId();
-    const schoolFolderId = await getOrCreateFolder(schoolName, rootId);
+    const schoolFolderId = await getOrCreateSchoolFolder(schoolName);
 
     await uploadJson(schoolFolderId, "students.json", students);
     await uploadJson(schoolFolderId, "meta.json", {
@@ -187,12 +170,10 @@ app.post("/schools/save", async (req, res) => {
  */
 app.get("/schools", async (req, res) => {
   try {
-    const rootId = await getRootFolderId();
-
     const folders = await drive.files.list({
       corpora: "drive",
       driveId: process.env.SHARED_DRIVE_ID,
-      q: `'${rootId}' in parents and mimeType='application/vnd.google-apps.folder'`,
+      q: `mimeType='application/vnd.google-apps.folder'`,
       fields: "files(name)",
       includeItemsFromAllDrives: true,
       supportsAllDrives: true
@@ -210,8 +191,7 @@ app.get("/schools", async (req, res) => {
  */
 app.get("/schools/:schoolName", async (req, res) => {
   try {
-    const rootId = await getRootFolderId();
-    const schoolFolderId = await getOrCreateFolder(req.params.schoolName, rootId);
+    const schoolFolderId = await getOrCreateSchoolFolder(req.params.schoolName);
     const students = await readJson(schoolFolderId, "students.json");
     res.json(students);
   } catch (e) {
